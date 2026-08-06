@@ -31,11 +31,18 @@ def generate_launch_description():
         description='Number of frames to accumulate before publishing (long)'
     )
 
+    declare_resolution = DeclareLaunchArgument(
+        'resolution',
+        default_value='4000x3000',
+        description='Image resolution'
+    )
+
     # 2. 获取参数引用 (Launch Configurations)
     is_color_config = LaunchConfiguration('is_color')
     pc_frame_id_config = LaunchConfiguration('pc_frame_id')
     cam_frame_id_config = LaunchConfiguration('cam_frame_id')
     frames_per_publish_config = LaunchConfiguration('frames_per_publish')
+    resolution_config = LaunchConfiguration('resolution')
 
     # 3. 定义节点
     livox_node = Node(
@@ -43,11 +50,13 @@ def generate_launch_description():
         executable='livox_color_node',   # 可执行文件名 (Node Name)
         name='livox_color_node',         # 运行时的节点名
         output='screen',                 # 将日志输出到终端
+        # arguments=['--ros-args', '--log-level', 'DEBUG'],  # 关键：这里设置
         parameters=[{
             'is_color': is_color_config,
             'pc_frame_id': pc_frame_id_config,
             'cam_frame_id': cam_frame_id_config,
-            'frames_per_publish': frames_per_publish_config
+            'frames_per_publish': frames_per_publish_config,
+            'resolution': resolution_config
         }]
     )
 
@@ -57,5 +66,6 @@ def generate_launch_description():
         declare_pc_frame_id,
         declare_cam_frame_id,
         declare_frames_per_publish,
+        declare_resolution,
         livox_node
     ])

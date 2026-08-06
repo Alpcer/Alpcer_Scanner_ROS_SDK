@@ -69,6 +69,9 @@ namespace CAMERA {
         Range valid_row_range, valid_col_range;
         Mat valid_range_mask;
 
+        bool useRgaResize = false;
+        Range valid_row_range_resized, valid_col_range_resized;
+
     private:
         uint32_t cur_width = INITIAL_WIDTH;
         uint32_t cur_height = INITIAL_HEIGHT;
@@ -103,12 +106,12 @@ namespace CAMERA {
             initShootingParams();
         }
         ~CameraInternal() {
+            releaseKernelSpace();
+            closeFd();
             if (pMppRgaDecoder != nullptr) {
                 delete pMppRgaDecoder;
                 pMppRgaDecoder = nullptr;
             }
-            releaseKernelSpace();
-            closeFd();
         }
 
         inline void setAutoExposure(bool isAuto, bool wait_for_frame_update = false) {
@@ -359,6 +362,10 @@ namespace CAMERA {
             return true;
         }
 
+        CameraParams getMainCameraParams() {
+            return cameraParamsMain;
+        }
+
         std::array<double,4> undistort(cv::Mat& distorted_img, cv::Mat& undistorted_img, cv::Mat& r) {
             cv::Mat mapX, mapY;
             cv::Matx33d k = cv::Matx33d::eye();
@@ -462,19 +469,20 @@ namespace CAMERA {
             spdlog::info("shootManualExposure end.\n");
         }
 
-        Mat decodeBufferFrameHASync(bool onlyValidRange, bool rotationCorrect, size_t bytesused = 0) {
+        Mat decodeBufferFrameHASync(bool onlyValidRange, bool rotationCorrect, size_t bytesused) {//同步解码
             Mat frame;
             if (cur_width == width) {
                 if (pMppRgaDecoder != nullptr) {
                     Mat frame2;
 
-                    long t = common_utils::currentTimeMilliseconds();
+//                    long t = common_utils::currentTimeMilliseconds();
                     if (!pMppRgaDecoder->decode(mptr[0], bytesused, frame2)) {
                         spdlog::info("mpp decode fail, replace by opencv\n");
+                        return frame;
                         copyFrameData();
                         frame2 = imdecode(buf, ImreadModes::IMREAD_COLOR);
                     }
-                    spdlog::info("image decoded, cost:{}s.\n", (common_utils::currentTimeMilliseconds()-t)/1000.0f);
+//                    spdlog::info("image decoded, cost:{}s.\n", (common_utils::currentTimeMilliseconds()-t)/1000.0f);
                     frame = onlyValidRange ? frame2(valid_row_range, valid_col_range) : frame2;
                 } else {
                     copyFrameData();
@@ -496,18 +504,66 @@ namespace CAMERA {
             }
         }
 
+//        Mat decodeBufferFrameHASync2(bool onlyValidRange, bool rotationCorrect, size_t bytesused, int target_width, int target_height) {//同步解码
+//            Mat frame;
+//            if (cur_width == width) {
+//                if (cur_width != target_width && !useRgaResize) {
+//                    useRgaResize = true;
+//                    valid_row_range_resized = Range(target_height*cameraParamsMain.row_range.start/cameraParamsMain.height, target_height*cameraParamsMain.row_range.end/cameraParamsMain.height);
+//                    valid_col_range_resized = Range(target_width*cameraParamsMain.col_range.start/cameraParamsMain.width, target_width*cameraParamsMain.col_range.end/cameraParamsMain.width);
+//                }
+//                Mat frame2;
+//                long t = common_utils::currentTimeMilliseconds();
+//                if (pMppRgaDecoder != nullptr && !pMppRgaDecoder->decode(mptr[0], bytesused, frame2, target_width, target_height)) {
+//                    if (pMppRgaDecoder != nullptr) {
+//                        spdlog::info("mpp decode fail, replace by opencv\n");
+//                    }
+//                    copyFrameData();
+//                    if (useRgaResize) {
+//                        Mat frame3 = imdecode(buf, ImreadModes::IMREAD_COLOR);
+//                        cv::resize(frame3, frame2, cv::Size(target_width, target_height));
+//                    } else {
+//                        frame2 = imdecode(buf, ImreadModes::IMREAD_COLOR);
+//                    }
+//                }
+//                spdlog::info("image decoded, cost:{}s.\n", (common_utils::currentTimeMilliseconds()-t)/1000.0f);
+//                if (onlyValidRange) {
+//                    if (useRgaResize) {
+//                        frame = frame2(valid_row_range_resized, valid_col_range_resized);
+//                    } else {
+//                        frame = frame2(valid_row_range, valid_col_range);
+//                    }
+//                } else {
+//                    frame = frame2;
+//                }
+//            } else {
+//                copyFrameData();
+//                Mat yuyv(cur_height, cur_width, CV_8UC2, buf.data()), bgr;
+//                cvtColor(yuyv, bgr, COLOR_YUV2BGR_YUYV);
+//                frame = onlyValidRange ? bgr(valid_row_range, valid_col_range) : bgr;
+//            }
+//
+//            if (rotationCorrect) {
+//                Mat frame2;
+//                correctImageRotation(frame, frame2);
+//                return frame2;
+//            } else {
+//                return frame;
+//            }
+//        }
+
         Mat decodeBufferFrameHA(bool onlyValidRange, bool rotationCorrect, std::vector<uchar>* p_buf = nullptr, size_t bytesused = 0) {
             Mat frame;
             if (cur_width == width) {
                 if (pMppRgaDecoder != nullptr && p_buf != nullptr) {
                     Mat frame2;
 
-                    long t = common_utils::currentTimeMilliseconds();
+//                    long t = common_utils::currentTimeMilliseconds();
                     if (!pMppRgaDecoder->decode(p_buf->data(), bytesused, frame2)) {
                         spdlog::info("mpp decode fail, replace by opencv\n");
                         frame2 = imdecode(p_buf == nullptr ? buf : (*p_buf), ImreadModes::IMREAD_COLOR);
                     }
-                    spdlog::info("image decoded, cost:{}s.\n", (common_utils::currentTimeMilliseconds()-t)/1000.0f);
+//                    spdlog::info("image decoded, cost:{}s.\n", (common_utils::currentTimeMilliseconds()-t)/1000.0f);
                     frame = onlyValidRange ? frame2(valid_row_range, valid_col_range) : frame2;
                 } else {
                     frame = onlyValidRange ? imdecode(p_buf == nullptr ? buf : (*p_buf), ImreadModes::IMREAD_COLOR)(valid_row_range, valid_col_range) : imdecode(p_buf == nullptr ? buf : (*p_buf), ImreadModes::IMREAD_COLOR);
@@ -527,12 +583,16 @@ namespace CAMERA {
             }
         }
 
-        inline cv::Mat shootAutoToCacheMatRealtime() {
+        inline cv::Mat shootAutoToCacheMatRealtime(std::vector<uchar>* p_buf = nullptr) {
             setAutoExposure(true, false);
             queueFrameBuffer();
             size_t bytesused = dequeueFrameBuffer();
+            if (p_buf != nullptr) {
+                p_buf->resize(bytesused);
+                memcpy(p_buf->data(), mptr[0], bytesused);
+            }
             cv::Mat mat = decodeBufferFrameHASync(true, false, bytesused);
-            {
+            if (!mat.empty()) {
                 std::lock_guard<std::mutex> lock(camera_mutex);
                 cached_image = mat;
             }
@@ -674,8 +734,8 @@ namespace CAMERA {
             }
 
             {
-                valid_row_range = Range(cur_height*cameraParams.row_range.start/cameraParams.height, cur_height*cameraParams.row_range.end/cameraParams.height);
-                valid_col_range = Range(cur_width*cameraParams.col_range.start/cameraParams.width, cur_width*cameraParams.col_range.end/cameraParams.width);
+                valid_row_range = Range(cameraParams.row_range.start, cameraParams.row_range.end);
+                valid_col_range = Range(cameraParams.col_range.start, cameraParams.col_range.end);
                 std::cout << comName << " valid_row_range:" << valid_row_range << std::endl;
                 std::cout << comName << " valid_col_range:" << valid_col_range << std::endl;
 
@@ -1562,8 +1622,8 @@ namespace CAMERA {
             spdlog::info("Shooting auto images finished.\n");
         }
 
-        inline Mat shootAutoToCacheMatRealtime() {
-            return cameraInternal->shootAutoToCacheMatRealtime();
+        inline Mat shootAutoToCacheMatRealtime(std::vector<uchar>* p_buf = nullptr) {
+            return cameraInternal->shootAutoToCacheMatRealtime(p_buf);
         }
 
         inline void cachedImage(cv::Mat& mat) {
@@ -1649,6 +1709,10 @@ namespace CAMERA {
 
         inline bool projectPoints(std::vector<Point3f>& objPoints, std::vector<Point2f>& imgPoints) {
             return cameraInternal->projectPoints(objPoints, imgPoints);
+        }
+
+        CameraParams getMainCameraParams() {
+            return cameraInternal->getMainCameraParams();
         }
 
         inline std::array<double,4> undistort(cv::Mat& distorted_img, cv::Mat& undistorted_img, cv::Mat& r) {//return intrinsic, order:fx,fy,cx,cy
