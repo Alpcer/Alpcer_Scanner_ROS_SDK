@@ -31,7 +31,7 @@
 #include <tf2_ros/transform_broadcaster.h>
 #include <tf2_ros/static_transform_broadcaster.h>
 #include <Eigen/Geometry>
-#include <cv_bridge/cv_bridge.hpp>
+#include <cv_bridge/cv_bridge.h>
 #include "camera_2eye.h"
 #include "ply_fast_writer.h"
 #include <CL/cl.h>
