@@ -153,26 +153,24 @@ namespace CAMERA2EYE {
 
         void skipFrames(int num) {
             for (int i=0; i<num; i++) {
-                dequeueFrameBuffer(); // 1. 取出当前帧
-                queueFrameBuffer();   // 2. 立即放回
+                queueFrameBuffer();
+                dequeueFrameBuffer();
             }
         }
 
         inline void copyFrameData(std::vector<uchar>* p_buf = nullptr) {
-            // 必须使用当前 dequeue 出来的真实索引 frameBuffer.index
-            unsigned char* active_ptr = mptr[frameBuffer.index];
             if (p_buf == nullptr) {
-                memcpy(buf.data(), active_ptr, buf.size());
+                memcpy(buf.data(), mptr[0], buf.size());
             } else {
                 p_buf->resize(buf.size());
-                memcpy(p_buf->data(), active_ptr, p_buf->size());
+                memcpy(p_buf->data(), mptr[0], p_buf->size());
             }
         }
 
         void acquireFrame(std::vector<uchar>* p_buf = nullptr) {
-            dequeueFrameBuffer(); // 1. 先等待并取出填满的缓冲区
-            copyFrameData(p_buf); // 2. 拷贝数据
-            queueFrameBuffer();   // 3. 用完后放回驱动队列循环使用
+            queueFrameBuffer();
+            dequeueFrameBuffer();
+            copyFrameData(p_buf);
         }
 
         static inline void correctImageRotation(Mat& src, Mat& dst) {
@@ -195,12 +193,14 @@ namespace CAMERA2EYE {
             Mat frame;
             if (cur_width == width) {
                 if (pMppRgaDecoder != nullptr) {
-                    // 使用动态索引指针 mptr[frameBuffer.index]
-                    if (!pMppRgaDecoder->decode(mptr[frameBuffer.index], bytesused, frame)) {
+
+//                    long t = common_utils::currentTimeMilliseconds();
+                    if (!pMppRgaDecoder->decode(mptr[0], bytesused, frame)) {
                         spdlog::info("mpp decode fail, replace by opencv\n");
                         copyFrameData();
                         frame = imdecode(buf, ImreadModes::IMREAD_COLOR);
                     }
+//                    spdlog::info("image decoded, cost:{}s.\n", (common_utils::currentTimeMilliseconds()-t)/1000.0f);
                 } else {
                     copyFrameData();
                     frame = imdecode(buf, ImreadModes::IMREAD_COLOR);
@@ -445,28 +445,28 @@ namespace CAMERA2EYE {
 
         inline cv::Mat shootAutoToCacheMatRealtime(std::vector<uchar>* p_buf = nullptr) {
             setAutoExposure(true, false);
-            size_t bytesused = dequeueFrameBuffer(); // 1. 先取出当前最新帧
+            queueFrameBuffer();
+            size_t bytesused = dequeueFrameBuffer();
             if (p_buf != nullptr) {
                 p_buf->resize(bytesused);
-                memcpy(p_buf->data(), mptr[frameBuffer.index], bytesused);
+                memcpy(p_buf->data(), mptr[0], bytesused);
             }
             cv::Mat mat = decodeBufferFrameHASync(true, false, bytesused);
             if (!mat.empty()) {
                 std::lock_guard<std::mutex> lock(camera_mutex);
                 cached_image = mat;
             }
-            queueFrameBuffer(); // 2. 解码完成后将该缓冲区放回驱动
             return mat;
         }
 
         inline void shootAutoRaw(std::vector<uchar>* p_buf = nullptr) {
             setAutoExposure(true, false);
-            size_t bytesused = dequeueFrameBuffer(); // 1. 先取出
+            queueFrameBuffer();
+            size_t bytesused = dequeueFrameBuffer();
             if (p_buf != nullptr) {
                 p_buf->resize(bytesused);
-                memcpy(p_buf->data(), mptr[frameBuffer.index], bytesused);
+                memcpy(p_buf->data(), mptr[0], bytesused);
             }
-            queueFrameBuffer(); // 2. 放回
         }
 
         inline void cachedImage(cv::Mat& mat) {
@@ -549,38 +549,33 @@ namespace CAMERA2EYE {
                 return;
             }
             kernelSpaceRequested = true;
+            //申请内核空间
+            requestBuffer.count = 1;
 
-            // 1. 申请 2 个内核缓冲区（双缓冲）
-            requestBuffer.count = 2;
-
-            if (ioctl(fd, VIDIOC_REQBUFS, &requestBuffer) < 0) {
+            if (ioctl(fd,VIDIOC_REQBUFS,&requestBuffer) < 0) {
                 throw std::runtime_error("申请空间失败");
             }
 
-            // 2. 映射所有内核空间到用户空间
-            for (int i = 0; i < requestBuffer.count; i++) {
+            for(int i = 0; i <1;i++) {
                 frameBuffer.index = i;
-                if (ioctl(fd, VIDIOC_QUERYBUF, &frameBuffer) < 0) {
+                if (ioctl(fd,VIDIOC_QUERYBUF,&frameBuffer) < 0) {//从内核空间中查询一个空间作映射
                     throw std::runtime_error("查询内核空间失败");
                 }
-                mptr[i] = (unsigned char *)mmap(NULL, frameBuffer.length, PROT_READ | PROT_WRITE, MAP_SHARED, fd, frameBuffer.m.offset);
-                size[i] = frameBuffer.length;
-            }
-
-            // 3. 【必须】在流开启前，把所有 buffer 全部放入驱动队列
-            for (int i = 0; i < requestBuffer.count; i++) {
-                frameBuffer.index = i;
-                if (ioctl(fd, VIDIOC_QBUF, &frameBuffer) < 0) {
-                    throw std::runtime_error("初始化放回队列失败");
+                //映射到用户空间
+                mptr[i] = (unsigned char *)mmap(NULL,frameBuffer.length,PROT_READ|PROT_WRITE,MAP_SHARED, fd,frameBuffer.m.offset);
+                size[i] = frameBuffer.length; //保存映射长度用于后期释放
+                /*
+                //查询后通知内核已经放回
+                if (ioctl(fd,VIDIOC_QBUF, &frameBuffer) < 0) {
+                    throw std::runtime_error("放回失败");
+                }*/
+                //初始化硬件解码和颜色空间转换器
+                if (pMppRgaDecoder != nullptr) {
+                    delete pMppRgaDecoder;
+                    pMppRgaDecoder = nullptr;
                 }
+                pMppRgaDecoder = new MppRgaDecoder(width, height);
             }
-
-            // 初始化硬件解码和颜色空间转换器
-            if (pMppRgaDecoder != nullptr) {
-                delete pMppRgaDecoder;
-                pMppRgaDecoder = nullptr;
-            }
-            pMppRgaDecoder = new MppRgaDecoder(width, height);
         }
 
         void releaseKernelSpace() {
@@ -589,13 +584,13 @@ namespace CAMERA2EYE {
             }
             kernelSpaceRequested = false;
             if (fd >= 0) {
-                // 释放所有映射
-                for (int i = 0; i < requestBuffer.count; i++) {
+                //释放映射
+                for(int i=0; i<1; i++) {
                     munmap(mptr[i], size[i]);
                 }
 
                 requestBuffer.count = 0;
-                if (ioctl(fd, VIDIOC_REQBUFS, &requestBuffer) < 0) {
+                if (ioctl(fd,VIDIOC_REQBUFS, &requestBuffer) < 0) {
                     throw std::runtime_error("注销空间失败");
                 }
             }

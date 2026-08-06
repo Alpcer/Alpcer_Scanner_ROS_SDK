@@ -1721,7 +1721,7 @@ int main(int argc, const char *argv[]) {
     node->declare_parameter<int64_t>("frames_per_publish", 200);
     node->declare_parameter<std::string>("resolution", "3840x1080");
     node->declare_parameter<bool>("image_raw_compressed", false);
-    node->declare_parameter<std::string>("qos", "SensorData");
+    node->declare_parameter<std::string>("qos", "SystemDefaults");//SystemDefaults//SensorData
     node->declare_parameter<bool>("tilt", true);
     node->declare_parameter<bool>("undistort", false);
     node->declare_parameter("undistort_angle_h", 0.0);
